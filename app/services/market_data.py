@@ -26,13 +26,22 @@ def fetch_underlying_prices(tickers: List[str]) -> Dict[str, float]:
                 if not ticker_obj:
                     continue
                 
-                # Fast info lookup avoids full ticker metadata download
-                fast_info = getattr(ticker_obj, "fast_info", {})
-                price = (
-                    fast_info.get("lastPrice") 
-                    or fast_info.get("regularMarketPreviousClose")
-                    or ticker_obj.info.get("regularMarketPrice")
-                )
+                # FastInfo is an object, so use getattr or direct attributes
+                fast_info = getattr(ticker_obj, "fast_info", None)
+                price = None
+
+                if fast_info:
+                    price = (
+                        getattr(fast_info, "last_price", None)
+                        or getattr(fast_info, "lastPrice", None)
+                        or getattr(fast_info, "previous_close", None)
+                        or getattr(fast_info, "regularMarketPreviousClose", None)
+                    )
+
+                # Fallback to .info dict only if fast_info fails completely
+                if price is None and hasattr(ticker_obj, "info"):
+                    info = ticker_obj.info or {}
+                    price = info.get("regularMarketPrice") or info.get("currentPrice")
                 
                 if price and float(price) > 0:
                     prices[t] = float(price)

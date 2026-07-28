@@ -1,7 +1,7 @@
 # app/services/reconciler.py
 
 from typing import List, Dict, Any, Optional
-from app.schemas.positions import PositionItem, StrategyType, UnderlyingLeg, OptionLeg
+from app.schemas.positions import PositionItem, StrategyType, UnderlyingLeg, OptionLeg, SectorSummary
 from app.services.market_data import fetch_underlying_prices
 
 SECTOR_MAP = {
@@ -12,13 +12,29 @@ SECTOR_MAP = {
     "SOFI": "Financials",
 }
 
+def extract_ticker_symbol(val: Any) -> str:
+    """Recursively extracts a string ticker symbol from raw string/dict structures."""
+    if not val:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, dict):
+        sym = val.get("symbol") or val.get("raw_symbol") or val.get("ticker")
+        if isinstance(sym, str):
+            return sym.strip()
+        if isinstance(sym, dict):
+            return extract_ticker_symbol(sym)
+    if hasattr(val, "symbol"):
+        return extract_ticker_symbol(getattr(val, "symbol"))
+    return ""
+
 def extract_industry(data: dict, ticker: str) -> str:
     sym_obj = data.get("symbol") if isinstance(data.get("symbol"), dict) else {}
     if not sym_obj and isinstance(data.get("option_symbol"), dict):
         sym_obj = data["option_symbol"].get("underlying_symbol") or {}
 
     industry = sym_obj.get("industry") or sym_obj.get("sector")
-    if not industry or industry == "Common Stock":
+    if not industry or industry in ["Common Stock", "Equity"]:
         industry = SECTOR_MAP.get(ticker.upper(), "Equity")
     return industry
 
@@ -86,9 +102,7 @@ def reconcile_positions(
         opt_price = float(opt.get("price") or opt.get("avg_price") or 0.0)
 
         industry = extract_industry(opt, symbol)
-        
-        # Get live underlying stock price
-        stock_price = live_prices.get(symbol) or 0.0
+        stock_price = live_prices.get(symbol, 0.0)
 
         option_leg_data = OptionLeg(
             contract_symbol=contract_sym,
@@ -109,7 +123,7 @@ def reconcile_positions(
                 symbol=symbol,
                 strategy=StrategyType.COVERED_CALL,
                 industry=industry,
-                current_price=stock_price if stock_price > 0 else opt_price,
+                current_price=stock_price,
                 underlying=UnderlyingLeg(shares=required_shares, avg_purchase_price=avg_p),
                 option_leg=option_leg_data
             ))
@@ -121,12 +135,28 @@ def reconcile_positions(
                 symbol=symbol,
                 strategy=StrategyType.CASH_SECURED_PUT,
                 industry=industry,
-                current_price=stock_price if stock_price > 0 else opt_price,
+                current_price=stock_price,
                 underlying=None,
                 option_leg=option_leg_data
             ))
 
-    # 4. Calculate Portfolio Percentages
+    # 4. Catch Unmatched Long Shares (Standalone Equities)
+    for symbol, remaining_shares in equity_pool.items():
+        if remaining_shares > 0:
+            eq_match = equity_meta.get(symbol, {})
+            avg_p = float(eq_match.get("average_buy_price") or eq_match.get("avg_price") or 0.0)
+            stock_price = live_prices.get(symbol, 0.0)
+            
+            positions.append(PositionItem(
+                symbol=symbol,
+                strategy=StrategyType.LONG_EQUITY if hasattr(StrategyType, "LONG_EQUITY") else "LONG_EQUITY",
+                industry=extract_industry(eq_match, symbol),
+                current_price=stock_price,
+                underlying=UnderlyingLeg(shares=remaining_shares, avg_purchase_price=avg_p),
+                option_leg=None
+            ))
+
+    # 5. Calculate Portfolio Percentages
     total_val = 0.0
     pos_vals = []
 
@@ -149,26 +179,6 @@ def reconcile_positions(
 
     return positions
 
-def extract_ticker_symbol(val: Any) -> str:
-    """Recursively extracts a string ticker symbol from raw string/dict structures."""
-    if not val:
-        return ""
-    if isinstance(val, str):
-        return val.strip()
-    if isinstance(val, dict):
-        sym = val.get("symbol") or val.get("raw_symbol") or val.get("ticker")
-        if isinstance(sym, str):
-            return sym.strip()
-        if isinstance(sym, dict):
-            return extract_ticker_symbol(sym)
-    if hasattr(val, "symbol"):
-        return extract_ticker_symbol(getattr(val, "symbol"))
-    return ""
-
-    # app/services/reconciler.py
-
-from app.schemas.positions import SectorSummary, PositionItem, StrategyType
-
 def calculate_sector_summaries(positions: list[PositionItem]) -> list[SectorSummary]:
     """
     Groups positions by industry sector and calculates total capital 
@@ -181,13 +191,10 @@ def calculate_sector_summaries(positions: list[PositionItem]) -> list[SectorSumm
     for pos in positions:
         cap = 0.0
         
-        # Calculate committed capital per strategy
         if pos.underlying and pos.underlying.shares:
-            # Covered Calls or Long Stock: Capital tied up in shares
             p = pos.current_price or pos.underlying.avg_purchase_price or 0.0
             cap = pos.underlying.shares * p
         elif pos.strategy == StrategyType.CASH_SECURED_PUT and pos.option_leg:
-            # Cash-Secured Puts: Capital locked in cash collateral (Strike * 100 * Contracts)
             strike = pos.option_leg.strike_price or 0.0
             contracts = abs(pos.option_leg.quantity)
             cap = strike * 100 * contracts
@@ -215,6 +222,5 @@ def calculate_sector_summaries(positions: list[PositionItem]) -> list[SectorSumm
                 )
             )
             
-    # Sort descending by sector weight
     sectors.sort(key=lambda s: s.portfolio_pct, reverse=True)
     return sectors
