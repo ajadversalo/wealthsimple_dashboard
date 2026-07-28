@@ -9,18 +9,56 @@ CONSUMER_KEY = os.getenv("SNAPTRADE_CONSUMER_KEY")
 USER_ID = os.getenv("SNAPTRADE_USER_ID")
 USER_SECRET = os.getenv("SNAPTRADE_USER_SECRET")
 
+# Initialize with environment variables
 snaptrade = SnapTrade(
-    client_id=CLIENT_ID,
-    consumer_key=CONSUMER_KEY
+    client_id=os.getenv("SNAPTRADE_CLIENT_ID"),
+    consumer_key=os.getenv("SNAPTRADE_CONSUMER_KEY")
 )
 
-def fetch_all_user_positions():
-    # Pass empty strings or omit user_id/user_secret for Personal API keys
-    response = snaptrade.account_information.get_all_user_holdings(
-        user_id="",
-        user_secret=""
-    )
-    return response.body
+async def fetch_all_user_positions():
+    """
+    Fetches raw stock positions and options positions for Personal API keys.
+    Runs SDK calls in an async thread to prevent blocking FastAPI's event loop.
+    """
+    def _get_data():
+        # 1. Fetch connected accounts
+        accounts_res = snaptrade.account_information.list_user_accounts(
+            user_id="",
+            user_secret=""
+        )
+        accounts = accounts_res.body or []
+
+        all_equities = []
+        all_options = []
+
+        # 2. Iterate through accounts to pull holdings and option positions
+        for acc in accounts:
+            acc_id = acc.get("id")
+            if not acc_id:
+                continue
+
+            # Fetch equity positions
+            pos_res = snaptrade.account_information.get_user_account_positions(
+                user_id="",
+                user_secret="",
+                account_id=acc_id
+            )
+            if pos_res.body:
+                all_equities.extend(pos_res.body)
+
+            # Fetch option holdings
+            opt_res = snaptrade.options.list_option_holdings(
+                user_id="",
+                user_secret="",
+                account_id=acc_id
+            )
+            if opt_res.body:
+                all_options.extend(opt_res.body)
+
+        return all_equities, all_options
+
+    # Run blocking SDK HTTP calls in threadpool so 'await' works in FastAPI
+    return await asyncio.to_thread(_get_data)
 
 def _clean_sdk_response(res):
     """Converts SDK response objects or lists into standard Python dicts."""
