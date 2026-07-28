@@ -1,5 +1,11 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
-pydantic>=2.6.0
-snaptrade-python-sdk>=10.0.0
-pytest>=8.0.0
+fastapi
+uvicorn
+pydantic
+yfinance
+snaptrade-python-sdk
+ib_insync
+pandas
+numpy
+pandas_ta
+tabulate
+python-dotenv
