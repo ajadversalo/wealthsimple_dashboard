@@ -5,24 +5,11 @@ from snaptrade_client import SnapTrade
 
 load_dotenv()
 
-CLIENT_ID = os.getenv("SNAPTRADE_CLIENT_ID", "PERS-N918HEG1FCVRF14XCB37")
-CONSUMER_KEY = os.getenv("SNAPTRADE_CONSUMER_KEY", "teViF6Sp7S1q9snJRUCy4Qrri2iAI1ixXYiIUDZ6hDMQSzuhVE")
-
-# Load credentials from ENV. For Personal Keys, if they are not set, leave them empty/None
-USER_ID = os.getenv("SNAPTRADE_USER_ID")
-USER_SECRET = os.getenv("SNAPTRADE_USER_SECRET")
-
+# Initialize SnapTrade with Personal credentials
 snaptrade = SnapTrade(
-    client_id=CLIENT_ID,
-    consumer_key=CONSUMER_KEY
+    client_id=os.getenv("SNAPTRADE_CLIENT_ID", "PERS-N918HEG1FCVRF14XCB37"),
+    consumer_key=os.getenv("SNAPTRADE_CONSUMER_KEY")
 )
-
-def _get_auth_kwargs():
-    """Only pass user credentials if valid, non-placeholder keys are present."""
-    if USER_ID and USER_SECRET and USER_ID != "personal_account":
-        return {"user_id": USER_ID, "user_secret": USER_SECRET}
-    # For Personal Keys without explicit user credentials, pass empty strings or omit
-    return {"user_id": "", "user_secret": ""}
 
 def _clean_sdk_response(res):
     """Converts SDK response objects or lists into standard Python dicts."""
@@ -44,38 +31,38 @@ def _clean_sdk_response(res):
 
 async def fetch_all_user_positions():
     """
-    Fetches stock positions and option holdings using non-blocking threadpool.
+    Fetches stock positions and options holdings for Personal API Keys.
+    Runs SDK calls synchronously in a background thread.
     """
     def _sync_fetch():
-        auth = _get_auth_kwargs()
-
-        # 1. Fetch all accounts
-        accounts_res = snaptrade.account_information.list_user_accounts(**auth)
+        # Notice: NO user_id or user_secret passed here for Personal Keys
+        accounts_res = snaptrade.account_information.list_user_accounts()
         accounts = _clean_sdk_response(accounts_res)
 
         all_equities = []
         all_options = []
 
-        # 2. Extract positions for each account
         for acc in accounts:
             acc_id = acc.get("id") if isinstance(acc, dict) else getattr(acc, "id", None)
             if not acc_id:
                 continue
 
             try:
+                # Omit user_id and user_secret here as well
                 eq_res = snaptrade.account_information.get_user_account_positions(
-                    account_id=acc_id, **auth
+                    account_id=acc_id
                 )
                 opt_res = snaptrade.options.list_option_holdings(
-                    account_id=acc_id, **auth
+                    account_id=acc_id
                 )
 
                 all_equities.extend(_clean_sdk_response(eq_res))
                 all_options.extend(_clean_sdk_response(opt_res))
-            except Exception:
+            except Exception as e:
+                print(f"Error fetching account {acc_id}: {e}")
                 continue
 
         return all_equities, all_options
 
-    # Offload synchronous SDK HTTP calls to a background thread
+    # Offload blocking SDK call to background thread so FastAPI handles it asynchronously
     return await asyncio.to_thread(_sync_fetch)
