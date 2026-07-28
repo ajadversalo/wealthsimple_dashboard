@@ -23,8 +23,8 @@ async def fetch_all_user_positions():
     def _get_data():
         # 1. Fetch connected accounts
         accounts_res = snaptrade.account_information.list_user_accounts(
-            user_id="",
-            user_secret=""
+            user_id=None,
+            user_secret=None
         )
         accounts = accounts_res.body or []
 
@@ -39,8 +39,8 @@ async def fetch_all_user_positions():
 
             # Fetch equity positions
             pos_res = snaptrade.account_information.get_user_account_positions(
-                user_id="",
-                user_secret="",
+                user_id=None,
+                user_secret=None,
                 account_id=acc_id
             )
             if pos_res.body:
@@ -48,8 +48,8 @@ async def fetch_all_user_positions():
 
             # Fetch option holdings
             opt_res = snaptrade.options.list_option_holdings(
-                user_id="",
-                user_secret="",
+                user_id=None,
+                user_secret=None,
                 account_id=acc_id
             )
             if opt_res.body:
