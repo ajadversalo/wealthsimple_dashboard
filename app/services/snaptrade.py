@@ -5,6 +5,9 @@ from snaptrade_client import SnapTrade
 
 load_dotenv()
 
+print("CLIENT_ID =", os.getenv("SNAPTRADE_CLIENT_ID"))
+print("CONSUMER_KEY exists =", bool(os.getenv("SNAPTRADE_CONSUMER_KEY")))
+
 # Initialize SnapTrade with Personal credentials
 snaptrade = SnapTrade(
     client_id=os.getenv("SNAPTRADE_CLIENT_ID", "PERS-N918HEG1FCVRF14XCB37"),
