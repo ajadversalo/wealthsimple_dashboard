@@ -9,4 +9,3 @@ numpy
 pandas_ta
 tabulate
 python-dotenv
-python-3.11.9
