@@ -2,7 +2,7 @@ fastapi
 uvicorn
 pydantic
 yfinance
-snaptrade-python-sdk
+snaptrade-python-sdk==11.0.213
 ib_insync
 pandas
 numpy

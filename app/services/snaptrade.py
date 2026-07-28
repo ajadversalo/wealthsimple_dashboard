@@ -1,19 +1,17 @@
 import os
 import asyncio
 from dotenv import load_dotenv
+import snaptrade_client
 from snaptrade_client import SnapTrade
 
 load_dotenv()
 
-print("CLIENT_ID =", os.getenv("SNAPTRADE_CLIENT_ID"))
-print("CONSUMER_KEY exists =", bool(os.getenv("SNAPTRADE_CONSUMER_KEY")))
+USER_ID = os.getenv("SNAPTRADE_USER_ID")
+USER_SECRET = os.getenv("SNAPTRADE_USER_SECRET")
 
-print("SnapTrade module:", snaptrade_client.__file__)
-print("SnapTrade version:", getattr(snaptrade_client, "__version__", "unknown"))
-
-# Initialize SnapTrade with Personal credentials
+# Initialize SnapTrade
 snaptrade = SnapTrade(
-    client_id=os.getenv("SNAPTRADE_CLIENT_ID", "PERS-N918HEG1FCVRF14XCB37"),
+    client_id=os.getenv("SNAPTRADE_CLIENT_ID"),
     consumer_key=os.getenv("SNAPTRADE_CONSUMER_KEY")
 )
 
@@ -37,12 +35,15 @@ def _clean_sdk_response(res):
 
 async def fetch_all_user_positions():
     """
-    Fetches stock positions and options holdings for Personal API Keys.
+    Fetches stock positions and options holdings.
     Runs SDK calls synchronously in a background thread.
     """
     def _sync_fetch():
-        # Notice: NO user_id or user_secret passed here for Personal Keys
-        accounts_res = snaptrade.account_information.list_user_accounts()
+        # Pass user_id and user_secret here
+        accounts_res = snaptrade.account_information.list_user_accounts(
+            user_id=USER_ID,
+            user_secret=USER_SECRET
+        )
         accounts = _clean_sdk_response(accounts_res)
 
         all_equities = []
@@ -54,11 +55,15 @@ async def fetch_all_user_positions():
                 continue
 
             try:
-                # Omit user_id and user_secret here as well
+                # Pass user_id and user_secret to position endpoints
                 eq_res = snaptrade.account_information.get_user_account_positions(
+                    user_id=USER_ID,
+                    user_secret=USER_SECRET,
                     account_id=acc_id
                 )
                 opt_res = snaptrade.options.list_option_holdings(
+                    user_id=USER_ID,
+                    user_secret=USER_SECRET,
                     account_id=acc_id
                 )
 
@@ -70,5 +75,4 @@ async def fetch_all_user_positions():
 
         return all_equities, all_options
 
-    # Offload blocking SDK call to background thread so FastAPI handles it asynchronously
     return await asyncio.to_thread(_sync_fetch)
