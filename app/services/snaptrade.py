@@ -14,6 +14,14 @@ snaptrade = SnapTrade(
     consumer_key=CONSUMER_KEY
 )
 
+def fetch_all_user_positions():
+    # Pass empty strings or omit user_id/user_secret for Personal API keys
+    response = snaptrade.account_information.get_all_user_holdings(
+        user_id="",
+        user_secret=""
+    )
+    return response.body
+
 def _clean_sdk_response(res):
     """Converts SDK response objects or lists into standard Python dicts."""
     if hasattr(res, "body"):
