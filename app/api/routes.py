@@ -48,19 +48,35 @@ async def get_portfolio_positions():
 
         # Calculate total market value of long stock holdings (e.g. PFE)
         # Calculate total market value of long stock holdings (e.g. 100 shares of PFE)
+        # 4. Extract Long Stock Market Value (e.g., 100 shares of PFE)
         long_equity_usd = 0.0
+        # Extract Short Options Liability (buyback value)
+        short_options_liability_usd = 0.0
+
         for pos in positions:
-            # Handle both Pydantic model instances and raw dicts
+            # Handle both Pydantic models and dicts
             underlying = getattr(pos, "underlying", None) if not isinstance(pos, dict) else pos.get("underlying")
+            option_leg = getattr(pos, "option_leg", None) if not isinstance(pos, dict) else pos.get("option_leg")
             current_price = getattr(pos, "current_price", 0.0) if not isinstance(pos, dict) else pos.get("current_price", 0.0)
-            
+
+            # Long shares value
             if underlying:
                 shares = getattr(underlying, "shares", 0.0) if not isinstance(underlying, dict) else underlying.get("shares", 0.0)
                 if shares > 0 and current_price:
                     long_equity_usd += float(shares) * float(current_price)
 
-        # Net Portfolio Equity = Total Cash + Long Stock Value ($16,460.76 + $2,515.00 = ~$18,975.76 USD)
-        net_portfolio_usd = usd_cash_balance + long_equity_usd
+            # Short option market liability (Quantity is negative, e.g., -1.0)
+            if option_leg:
+                qty = getattr(option_leg, "quantity", 0.0) if not isinstance(option_leg, dict) else option_leg.get("quantity", 0.0)
+                avg_price = getattr(option_leg, "avg_price", 0.0) if not isinstance(option_leg, dict) else option_leg.get("avg_price", 0.0)
+                
+                # If short option, current market cost to close liability
+                if qty < 0:
+                    # Uses current option price / premium liability (1 contract = 100 shares)
+                    short_options_liability_usd += abs(float(qty)) * float(avg_price) * 100.0
+
+        # 5. Net Portfolio Value = Cash + Stock Value - Short Option Buyback Liability
+        net_portfolio_usd = (usd_cash_balance + long_equity_usd) - short_options_liability_usd
 
         # Available cash remaining after options collateral reservation
         available_cash_usd = max(0.0, usd_cash_balance - usd_committed)
