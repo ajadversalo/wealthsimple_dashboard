@@ -47,13 +47,19 @@ async def get_portfolio_positions():
                     usd_cash_balance += (cash_amount / fx_rate)
 
         # Calculate total market value of long stock holdings (e.g. PFE)
-        long_equity_usd = sum(
-            pos.market_value 
-            for pos in positions 
-            if getattr(pos, "shares_owned", 0) > 0
-        )
+        # Calculate total market value of long stock holdings (e.g. 100 shares of PFE)
+        long_equity_usd = 0.0
+        for pos in positions:
+            # Handle both Pydantic model instances and raw dicts
+            underlying = getattr(pos, "underlying", None) if not isinstance(pos, dict) else pos.get("underlying")
+            current_price = getattr(pos, "current_price", 0.0) if not isinstance(pos, dict) else pos.get("current_price", 0.0)
+            
+            if underlying:
+                shares = getattr(underlying, "shares", 0.0) if not isinstance(underlying, dict) else underlying.get("shares", 0.0)
+                if shares > 0 and current_price:
+                    long_equity_usd += float(shares) * float(current_price)
 
-        # Net Portfolio Equity = Total Cash + Long Stock Value
+        # Net Portfolio Equity = Total Cash + Long Stock Value ($16,460.76 + $2,515.00 = ~$18,975.76 USD)
         net_portfolio_usd = usd_cash_balance + long_equity_usd
 
         # Available cash remaining after options collateral reservation
