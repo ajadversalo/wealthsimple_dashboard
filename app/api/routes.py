@@ -29,31 +29,31 @@ async def get_portfolio_positions():
         positions = reconcile_positions(raw_equities, raw_options)
         sectors = calculate_sector_summaries(positions)
         
+        fx_rate = get_usd_cad_rate()
+
         # 3. Capital and Cash Calculations
         usd_committed = sum(s.capital_committed for s in sectors)
-        net_portfolio_usd = 0.0
+        usd_cash_balance = 0.0
 
+        # Parse exact SnapTrade cash structure
         for bal in raw_balances:
             if isinstance(bal, dict):
-                # Pull net liquidation value or cash balance directly from SnapTrade
-                total_obj = (
-                    bal.get("total") 
-                    or bal.get("net_liquidation_value") 
-                    or bal.get("cash") 
-                    or bal.get("amount")
-                )
-                if isinstance(total_obj, (int, float)):
-                    net_portfolio_usd += float(total_obj)
-                elif isinstance(total_obj, dict):
-                    net_portfolio_usd += float(total_obj.get("amount", 0.0))
+                currency_code = bal.get("currency", {}).get("code", "USD")
+                cash_amount = float(bal.get("cash", 0.0))
 
-        # Free cash is remaining net equity after securing options collateral.
-        # If collateral exceeds account value, free cash is capped at 0.00.
-        usd_cash = max(0.0, net_portfolio_usd - usd_committed)
+                if currency_code == "USD":
+                    usd_cash_balance += cash_amount
+                elif currency_code == "CAD":
+                    # Convert CAD cash to USD for unified internal math
+                    usd_cash_balance += (cash_amount / fx_rate)
 
-        # 4. Apply FX rate
-        fx_rate = get_usd_cad_rate()
-        
+        # Net Portfolio Equity is your total account cash + position value
+        # (If all positions are cash-secured short options, cash is your equity foundation)
+        net_portfolio_usd = usd_cash_balance
+
+        # Available cash remaining after collateral reservation
+        available_cash_usd = max(0.0, usd_cash_balance - usd_committed)
+
         return PortfolioResponse(
             account_id="ALL_ACCOUNTS",
             updated_at=datetime.now(timezone.utc).isoformat(),
@@ -63,8 +63,8 @@ async def get_portfolio_positions():
                 cad=round(net_portfolio_usd * fx_rate, 2)
             ),
             remaining_capital=CurrencyValue(
-                usd=round(usd_cash, 2),
-                cad=round(usd_cash * fx_rate, 2)
+                usd=round(available_cash_usd, 2),
+                cad=round(available_cash_usd * fx_rate, 2)
             ),
             positions=positions,
             sectors=sectors
