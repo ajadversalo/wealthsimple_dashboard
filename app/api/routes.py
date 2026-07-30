@@ -22,38 +22,39 @@ def get_usd_cad_rate() -> float:
 @router.get("/positions", response_model=PortfolioResponse)
 async def get_portfolio_positions():
     try:
-        # 1. Unpack all 3 returned items from SnapTrade
+        # 1. Fetch raw positions, options, and balances from SnapTrade
         raw_equities, raw_options, raw_balances = await fetch_all_user_positions()
         
-        # 2. Reconcile positions and sectors
+        # 2. Reconcile positions and calculate sector collateral
         positions = reconcile_positions(raw_equities, raw_options)
         sectors = calculate_sector_summaries(positions)
         
         # 3. Capital and Cash Calculations
         usd_committed = sum(s.capital_committed for s in sectors)
+        usd_cash = 0.0
         net_portfolio_usd = 0.0
 
+        # Parse SnapTrade balance object
         for bal in raw_balances:
             if isinstance(bal, dict):
-                # SnapTrade balance responses can use 'total_detail', 'total_value', or 'total'
-                total_obj = (
-                    bal.get("total_detail") 
-                    or bal.get("total_value") 
-                    or bal.get("total")
-                )
-                
-                if isinstance(total_obj, dict):
-                    net_portfolio_usd += float(total_obj.get("amount", 0.0))
-                elif isinstance(total_obj, (int, float)):
-                    net_portfolio_usd += float(total_obj)
+                # Extract actual settled cash
+                cash_val = bal.get("cash") or bal.get("amount") or 0.0
+                if isinstance(cash_val, (int, float)):
+                    usd_cash += float(cash_val)
+                elif isinstance(cash_val, dict):
+                    usd_cash += float(cash_val.get("amount", 0.0))
 
-        # FIX: If SnapTrade total balance key is missing/0, fallback to real net portfolio equity
-        # Do NOT add $1,800 on top of usd_committed.
+                # Extract total account net value if SnapTrade provides it
+                tot_val = bal.get("total") or bal.get("net_liquidation_value")
+                if isinstance(tot_val, (int, float)):
+                    net_portfolio_usd += float(tot_val)
+                elif isinstance(tot_val, dict):
+                    net_portfolio_usd += float(tot_val.get("amount", 0.0))
+
+        # If SnapTrade doesn't return total equity directly in balances, 
+        # Total Portfolio Equity = Deployed Option Collateral + Actual Settled Cash
         if net_portfolio_usd == 0.0:
-            net_portfolio_usd = 18527.00  # Baseline real account net worth in USD
-
-        # Free cash is whatever net equity is remaining after option collateral
-        usd_cash = max(0.0, net_portfolio_usd - usd_committed)
+            net_portfolio_usd = usd_committed + usd_cash
 
         # 4. Apply FX rate
         fx_rate = get_usd_cad_rate()
