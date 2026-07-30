@@ -44,14 +44,19 @@ async def get_portfolio_positions():
                 if currency_code == "USD":
                     usd_cash_balance += cash_amount
                 elif currency_code == "CAD":
-                    # Convert CAD cash to USD for unified internal math
                     usd_cash_balance += (cash_amount / fx_rate)
 
-        # Net Portfolio Equity is your total account cash + position value
-        # (If all positions are cash-secured short options, cash is your equity foundation)
-        net_portfolio_usd = usd_cash_balance
+        # Calculate total market value of long stock holdings (e.g. PFE)
+        long_equity_usd = sum(
+            pos.market_value 
+            for pos in positions 
+            if getattr(pos, "shares_owned", 0) > 0
+        )
 
-        # Available cash remaining after collateral reservation
+        # Net Portfolio Equity = Total Cash + Long Stock Value
+        net_portfolio_usd = usd_cash_balance + long_equity_usd
+
+        # Available cash remaining after options collateral reservation
         available_cash_usd = max(0.0, usd_cash_balance - usd_committed)
 
         return PortfolioResponse(
