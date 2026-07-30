@@ -9,6 +9,7 @@ class StrategyType(str, Enum):
     CASH_SECURED_PUT = "CASH_SECURED_PUT"
     COVERED_CALL = "COVERED_CALL"
     LONG_STOCK = "LONG_STOCK"
+    LONG_EQUITY = "LONG_EQUITY"
 
 
 class UnderlyingLeg(BaseModel):
