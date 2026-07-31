@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 import yfinance as yf
+import asyncio
 
 from app.schemas.positions import PortfolioResponse, CurrencyValue
 from app.services.reconciler import (
@@ -11,9 +12,25 @@ from app.services.reconciler import (
     calculate_broker_totals,
 )
 from app.services.snaptrade import fetch_all_user_positions
+from app.services.csp_screener import screen_cash_secured_puts
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/screener/cash-secured-puts")
+async def get_cash_secured_put_candidates():
+    """Run the CSP screener and return the top eligible put per symbol."""
+    try:
+        candidates = await asyncio.to_thread(screen_cash_secured_puts)
+        return {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+        }
+    except Exception as exc:
+        logger.error("CSP screener failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to run CSP screener") from exc
 
 
 def get_usd_cad_rate() -> float:
