@@ -1,6 +1,7 @@
 """Cash-secured-put screening logic adapted from options_screener/v2.py."""
 
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from typing import Any
 
@@ -25,6 +26,8 @@ MIN_OTM, MAX_PRICE = 5.0, 100.0
 MIN_OPEN_INTEREST, MIN_AVG_VOLUME = 100, 1_000_000
 EARNINGS_BLACKOUT_DAYS = 21
 QUALITY_WEIGHT, OPTION_WEIGHT = 0.70, 0.30
+# Yahoo Finance requests are network-bound. Keep this modest to reduce throttling risk.
+MAX_SCREENING_WORKERS = 6
 
 
 def _number(value: Any, digits: int = 2) -> float | None:
@@ -145,7 +148,19 @@ def screen_cash_secured_puts() -> list[dict[str, Any]]:
     spy = yf.download("SPY", period="1y", progress=False, auto_adjust=True)["Close"]
     if isinstance(spy, pd.DataFrame):
         spy = spy.iloc[:, 0]
-    candidates = [candidate for symbol in WATCHLIST for candidate in _score_symbol(symbol, spy.squeeze())]
+    candidates = []
+    with ThreadPoolExecutor(max_workers=MAX_SCREENING_WORKERS) as executor:
+        futures = {
+            executor.submit(_score_symbol, symbol, spy.squeeze()): symbol
+            for symbol in WATCHLIST
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                candidates.extend(future.result())
+            except Exception:
+                logger.exception("CSP screening worker failed for %s", symbol)
+
     best_by_symbol: dict[str, dict[str, Any]] = {}
     for candidate in candidates:
         if candidate["symbol"] not in best_by_symbol or candidate["score"] > best_by_symbol[candidate["symbol"]]["score"]:
