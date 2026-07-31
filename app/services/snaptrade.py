@@ -1,10 +1,14 @@
 import os
 import asyncio
+import json
+import logging
 from dotenv import load_dotenv
 import snaptrade_client
 from snaptrade_client import SnapTrade
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 USER_ID = os.getenv("SNAPTRADE_USER_ID")
 USER_SECRET = os.getenv("SNAPTRADE_USER_SECRET")
@@ -88,9 +92,20 @@ async def fetch_all_user_positions():
                     user_id=USER_ID, user_secret=USER_SECRET, account_id=acc_id
                 )
                 cleaned_bal = _clean_sdk_response(bal_res)
+                logger.warning(
+                    "SNAPTRADE RAW BALANCE account_id=%s payload=%s",
+                    acc_id,
+                    json.dumps(cleaned_bal, default=str, sort_keys=True),
+                )
                 if isinstance(cleaned_bal, list):
+                    for item in cleaned_bal:
+                        if isinstance(item, dict):
+                            # SnapTrade balance rows omit their parent account, so
+                            # retain the account used to fetch them for broker mapping.
+                            item["account_id"] = acc_id
                     all_balances.extend(cleaned_bal)
                 elif isinstance(cleaned_bal, dict):
+                    cleaned_bal["account_id"] = acc_id
                     all_balances.append(cleaned_bal)
 
             except Exception as e:

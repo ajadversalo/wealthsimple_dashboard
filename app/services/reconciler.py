@@ -176,9 +176,11 @@ def calculate_broker_totals(positions, fx_rate: float, raw_accounts: list, raw_b
         for bal in raw_balances:
             if isinstance(bal, dict):
                 acc_info = bal.get("account", {})
-                acc_id = acc_info.get("id") if isinstance(acc_info, dict) else acc_info
+                acc_id = bal.get("account_id")
+                if not acc_id:
+                    acc_id = acc_info.get("id") if isinstance(acc_info, dict) else acc_info
                 
-                broker_name = account_to_broker.get(acc_id, "WEALTHSIMPLE")
+                broker_name = account_to_broker.get(acc_id, "OTHER")
 
                 currency_code = bal.get("currency", {}).get("code", "USD")
                 cash_amount = float(bal.get("cash", 0.0))
