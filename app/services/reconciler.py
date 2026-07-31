@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from app.schemas.positions import (
+from app.schemas.portfolio import (
     BrokerSummary,
     CurrencyValue,
     PortfolioResponse,

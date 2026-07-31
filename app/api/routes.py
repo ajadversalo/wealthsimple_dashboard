@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 import yfinance as yf
 import asyncio
 
-from app.schemas.positions import PortfolioResponse, CurrencyValue
+from app.schemas.portfolio import PortfolioResponse, CurrencyValue
 from app.services.reconciler import (
     reconcile_positions,
     calculate_sector_summaries,

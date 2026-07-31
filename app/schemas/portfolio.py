@@ -17,19 +17,19 @@ class UnderlyingLeg(BaseModel):
 
 class OptionLeg(BaseModel):
     contract_symbol: str
-    option_type: str  # "CALL" or "PUT"
+    option_type: str
     strike_price: float
     expiration_date: str
     quantity: float
     avg_price: Optional[float] = None
-    moneyness: Optional[str] = None  # "ITM" or "OTM"
+    moneyness: Optional[str] = None
 
 
 class PositionItem(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     symbol: str
-    broker: str               # "IBKR" | "KRAKEN" | "WEALTHSIMPLE"
-    asset_class: str          # "OPTIONS" | "EQUITY" | "CRYPTO"
+    broker: str
+    asset_class: str
     strategy: StrategyType
     industry: str
     current_price: Optional[float] = None
@@ -62,9 +62,9 @@ class BrokerSummary(BaseModel):
 class PortfolioResponse(BaseModel):
     account_id: str
     updated_at: str
-    fx_rate_usd_cad: float = 1.0        # Included so frontends know the applied rate
-    total_capital: CurrencyValue        # Net portfolio value
-    remaining_capital: CurrencyValue    # Cash/liquidity balance
+    fx_rate_usd_cad: float = 1.0
+    total_capital: CurrencyValue
+    remaining_capital: CurrencyValue
     broker_totals: Dict[str, BrokerSummary] = Field(default_factory=dict)
     positions: List[PositionItem]
     sectors: Optional[List[SectorSummary]] = Field(default_factory=list)
