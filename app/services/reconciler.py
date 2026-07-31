@@ -9,19 +9,8 @@ from app.schemas.portfolio import (
     UnderlyingLeg,
     OptionLeg,
 )
+from app.constants import SECTOR_MAP
 from app.services.market_data import fetch_underlying_prices
-
-SECTOR_MAP = {
-    "BAC": "Financials",
-    "BMY": "Healthcare",
-    "KHC": "Consumer Staples",
-    "PFE": "Healthcare",
-    "SOFI": "Financials",
-    "XRP": "Crypto",
-    "SOL": "Crypto",
-    "BTC": "Crypto",
-    "ETH": "Crypto",
-}
 
 # ==========================================
 # HELPER FUNCTIONS
