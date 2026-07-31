@@ -54,15 +54,28 @@ def _indicators(history: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _earnings_days(ticker: yf.Ticker) -> int | None:
+def _earnings_details(ticker: yf.Ticker) -> tuple[str | None, int | None]:
+    """Return the next earnings date and its distance from today, when available."""
     try:
         calendar = ticker.calendar
         if calendar is None or len(calendar) == 0:
-            return None
-        date = calendar.index[0]
-        return None if pd.isna(date) else (date.date() - datetime.now().date()).days
+            return None, None
+
+        if isinstance(calendar, pd.DataFrame) and "Earnings Date" in calendar.index:
+            value = calendar.loc["Earnings Date"].iloc[0]
+        elif isinstance(calendar, dict):
+            value = calendar.get("Earnings Date")
+        else:
+            value = calendar.index[0]
+
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+        date = pd.Timestamp(value)
+        if pd.isna(date):
+            return None, None
+        return date.date().isoformat(), (date.date() - datetime.now().date()).days
     except Exception:
-        return None
+        return None, None
 
 
 def _relative_strength(close: pd.Series, spy_close: pd.Series) -> tuple[float, float, float]:
@@ -80,7 +93,7 @@ def _score_symbol(symbol: str, spy_close: pd.Series) -> list[dict[str, Any]]:
         price = float(row["Close"])
         if price > MAX_PRICE:
             return []
-        earnings_days = _earnings_days(ticker)
+        earnings_date, earnings_days = _earnings_details(ticker)
         if earnings_days is not None and earnings_days <= EARNINGS_BLACKOUT_DAYS:
             return []
 
@@ -120,7 +133,7 @@ def _score_symbol(symbol: str, spy_close: pd.Series) -> list[dict[str, Any]]:
                 option_score = _clamp(yield_pct * 12, 0, 35) + _clamp(otm * 3, 0, 25) + _clamp(oi / 50, 0, 20) + 20
                 score = quality + liquidity
                 final = score * QUALITY_WEIGHT + option_score * OPTION_WEIGHT
-                candidates.append({"symbol": symbol, "price": _number(price), "expiry": expiry, "dte": dte, "strike": _number(strike), "premium": _number(premium), "yield_pct": _number(yield_pct), "otm_pct": _number(otm), "quality": _number(score), "option": _number(option_score), "score": _number(final), "trend": trend, "momentum": momentum, "strength": strength, "fundamentals": fundamentals, "risk": risk, "liquidity": liquidity, "reasons": "; ".join(base_reasons)})
+                candidates.append({"symbol": symbol, "price": _number(price), "expiry": expiry, "dte": dte, "strike": _number(strike), "premium": _number(premium), "yield_pct": _number(yield_pct), "otm_pct": _number(otm), "earnings_date": earnings_date, "earnings_days": earnings_days, "quality": _number(score), "option": _number(option_score), "score": _number(final), "trend": trend, "momentum": momentum, "strength": strength, "fundamentals": fundamentals, "risk": risk, "liquidity": liquidity, "reasons": "; ".join(base_reasons)})
         return candidates
     except Exception:
         logger.exception("CSP screening failed for %s", symbol)
