@@ -33,8 +33,8 @@ def _clean_sdk_response(res):
 
 async def fetch_all_user_positions():
     """
-    Fetches stock positions, options holdings, and account balances.
-    Returns: (all_equities, all_options, all_balances)
+    Fetches stock positions, options holdings, account balances, and account metadata.
+    Returns: (all_equities, all_options, all_balances, accounts)
     """
     def _sync_fetch():
         accounts_res = snaptrade.account_information.list_user_accounts(
@@ -53,17 +53,37 @@ async def fetch_all_user_positions():
                 continue
 
             try:
-                # Positions & Options
+                # 1. Fetch Positions
                 eq_res = snaptrade.account_information.get_user_account_positions(
                     user_id=USER_ID, user_secret=USER_SECRET, account_id=acc_id
                 )
+                cleaned_eq = _clean_sdk_response(eq_res)
+                
+                for item in cleaned_eq:
+                    if isinstance(item, dict):
+                        item["account_id"] = acc_id
+                        
+                        # -------------------------------------------------------------
+                        # FIX: Filter out options from equities list to prevent duplicate 
+                        # accounting of options/collateral in portfolio totals.
+                        # -------------------------------------------------------------
+                        symbol_info = item.get("symbol", {})
+                        if isinstance(symbol_info, dict) and "option_symbol" in symbol_info:
+                            continue  # Skip option contracts here; list_option_holdings handles them
+                            
+                        all_equities.append(item)
+
+                # 2. Fetch Options
                 opt_res = snaptrade.options.list_option_holdings(
                     user_id=USER_ID, user_secret=USER_SECRET, account_id=acc_id
                 )
-                all_equities.extend(_clean_sdk_response(eq_res))
-                all_options.extend(_clean_sdk_response(opt_res))
+                cleaned_opt = _clean_sdk_response(opt_res)
+                for item in cleaned_opt:
+                    if isinstance(item, dict):
+                        item["account_id"] = acc_id
+                all_options.extend(cleaned_opt)
 
-                # Account Balance (Net Value & Cash)
+                # 3. Fetch Balances
                 bal_res = snaptrade.account_information.get_user_account_balance(
                     user_id=USER_ID, user_secret=USER_SECRET, account_id=acc_id
                 )
@@ -77,6 +97,6 @@ async def fetch_all_user_positions():
                 print(f"Error fetching account {acc_id}: {e}")
                 continue
 
-        return all_equities, all_options, all_balances
+        return all_equities, all_options, all_balances, accounts
 
     return await asyncio.to_thread(_sync_fetch)

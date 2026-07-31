@@ -3,8 +3,39 @@
 import logging
 from typing import Dict, List
 import yfinance as yf
+import httpx
 
 logger = logging.getLogger(__name__)
+
+# Map standard symbols to CoinGecko IDs
+COINGECKO_MAP = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "XRP": "ripple",
+}
+
+async def fetch_crypto_prices(symbols: list[str]) -> dict[str, float]:
+    ids = [COINGECKO_MAP[s.upper()] for s in symbols if s.upper() in COINGECKO_MAP]
+    if not ids:
+        return {}
+        
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(ids)}&vs_currencies=usd"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.get(url, timeout=5.0)
+            data = res.json()
+            
+            # Map back to standard ticker keys (e.g. 'XRP': 1.08)
+            prices = {}
+            for sym, cg_id in COINGECKO_MAP.items():
+                if cg_id in data:
+                    prices[sym] = float(data[cg_id]["usd"])
+            return prices
+        except Exception as e:
+            # Fallback gracefully
+            return {}
 
 def fetch_underlying_prices(tickers: List[str]) -> Dict[str, float]:
     """

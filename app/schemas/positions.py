@@ -1,8 +1,6 @@
-# app/schemas/positions.py
-
 from enum import Enum
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class StrategyType(str, Enum):
@@ -28,7 +26,10 @@ class OptionLeg(BaseModel):
 
 
 class PositionItem(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     symbol: str
+    broker: str               # "IBKR" | "KRAKEN" | "WEALTHSIMPLE"
+    asset_class: str          # "OPTIONS" | "EQUITY" | "CRYPTO"
     strategy: StrategyType
     industry: str
     current_price: Optional[float] = None
@@ -48,11 +49,22 @@ class CurrencyValue(BaseModel):
     usd: float = 0.0
     cad: float = 0.0
 
+
+class BrokerSummary(BaseModel):
+    broker: str
+    net_value: CurrencyValue
+    option_liabilities: CurrencyValue
+    remaining_capital: CurrencyValue
+    deployed_capital: CurrencyValue
+    total_capital: CurrencyValue
+
+
 class PortfolioResponse(BaseModel):
     account_id: str
     updated_at: str
     fx_rate_usd_cad: float = 1.0        # Included so frontends know the applied rate
-    total_capital: CurrencyValue        # Committed capital
+    total_capital: CurrencyValue        # Net portfolio value
     remaining_capital: CurrencyValue    # Cash/liquidity balance
+    broker_totals: Dict[str, BrokerSummary] = Field(default_factory=dict)
     positions: List[PositionItem]
     sectors: Optional[List[SectorSummary]] = Field(default_factory=list)
