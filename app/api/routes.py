@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 import yfinance as yf
@@ -17,6 +18,43 @@ from app.services.csp_screener import screen_cash_secured_puts
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def build_account_map(raw_accounts, raw_equities, raw_options):
+    """Build stable account labels, including a fallback for unnamed WS accounts."""
+    account_map = {
+        acc.get("id"): normalize_account_label(acc)
+        for acc in raw_accounts
+        if isinstance(acc, dict) and acc.get("id")
+    }
+
+    # Prefer explicit deployment configuration when available.
+    swing_id = os.getenv("SNAPTRADE_SWING_ACCOUNT_ID")
+    options_id = os.getenv("SNAPTRADE_OPTIONS_ACCOUNT_ID")
+    if swing_id:
+        account_map[swing_id] = "WEALTHSIMPLE SWING"
+    if options_id:
+        account_map[options_id] = "WEALTHSIMPLE OPTIONS"
+
+    wealthsimple_ids = {
+        acc_id for acc_id, label in account_map.items() if label.startswith("WEALTHSIMPLE")
+    }
+    option_account_ids = {
+        item.get("account_id")
+        for item in raw_options
+        if isinstance(item, dict) and item.get("account_id") in wealthsimple_ids
+    }
+
+    # SnapTrade can return two Wealthsimple accounts with identical generic
+    # metadata. If options exist in exactly one of them, the other is Swing.
+    if len(wealthsimple_ids) == 2 and len(option_account_ids) == 1:
+        option_account_id = next(iter(option_account_ids))
+        account_map[option_account_id] = "WEALTHSIMPLE OPTIONS"
+        swing_account_id = next(iter(wealthsimple_ids - {option_account_id}))
+        account_map[swing_account_id] = "WEALTHSIMPLE SWING"
+
+    logger.info("Resolved account labels: %s", account_map)
+    return account_map
 
 
 @router.get("/screener/cash-secured-puts")
@@ -50,11 +88,7 @@ async def get_portfolio_positions():
         # 1. Fetch raw positions, options, balances, and accounts from SnapTrade
         raw_equities, raw_options, raw_balances, raw_accounts = await fetch_all_user_positions()
 
-        account_map = {}
-        for acc in raw_accounts:
-            acc_id = acc.get("id")
-            if acc_id:
-                account_map[acc_id] = normalize_account_label(acc)
+        account_map = build_account_map(raw_accounts, raw_equities, raw_options)
 
         # 2. Reconcile Positions & Sectors
         positions = reconcile_positions(raw_equities, raw_options, account_map=account_map)
@@ -109,7 +143,8 @@ async def get_portfolio_positions():
             positions=positions,
             fx_rate=fx_rate,
             raw_accounts=raw_accounts,
-            raw_balances=raw_balances  # <-- Add this parameter
+            raw_balances=raw_balances,
+            account_map=account_map,
         )
 
         return PortfolioResponse(

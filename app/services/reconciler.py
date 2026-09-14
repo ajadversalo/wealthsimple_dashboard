@@ -177,7 +177,13 @@ def calculate_moneyness(option_type: str, strike: float, stock_price: float) -> 
 
 # app/services/reconciler.py
 
-def calculate_broker_totals(positions, fx_rate: float, raw_accounts: list, raw_balances: list = None) -> dict:
+def calculate_broker_totals(
+    positions,
+    fx_rate: float,
+    raw_accounts: list,
+    raw_balances: list = None,
+    account_map: Optional[Dict[str, str]] = None,
+) -> dict:
     broker_cash = {}
     broker_long_equity = {}
     broker_option_liabilities = {}
@@ -188,7 +194,7 @@ def calculate_broker_totals(positions, fx_rate: float, raw_accounts: list, raw_b
     for acc in (raw_accounts or []):
         acc_id = acc.get("id")
         if acc_id:
-            account_to_broker[acc_id] = normalize_account_label(acc)
+            account_to_broker[acc_id] = (account_map or {}).get(acc_id, normalize_account_label(acc))
 
     # 2. Extract Cash (Remaining Capital) per broker from raw_balances
     if raw_balances:
