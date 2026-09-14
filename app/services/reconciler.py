@@ -370,7 +370,18 @@ def reconcile_positions(
         required_shares = abs(qty) * 100
         account_key = (raw_account_id(opt), symbol)
         available_shares = equity_pool.get(account_key, 0.0)
-        opt_price = float(opt.get("price") or opt.get("avg_price") or 0.0)
+        # SnapTrade's `price` is the latest market quote for the option,
+        # not the opening premium. Use the position cost basis instead.
+        # SnapTrade reports option average_purchase_price per contract;
+        # PositionItem stores premium per share for the UI calculations.
+        average_purchase_price = opt.get("average_purchase_price")
+        if average_purchase_price is not None:
+            opt_price = abs(float(average_purchase_price)) / 100.0
+        else:
+            # Preserve compatibility with older normalized payloads that
+            # already supplied avg_price on a per-share basis. Never fall
+            # back to `price`, because that is a market quote.
+            opt_price = float(opt.get("avg_price") or 0.0)
 
         industry = extract_industry(opt, symbol)
         stock_price = live_prices.get(symbol, 0.0)
