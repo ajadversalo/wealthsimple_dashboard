@@ -29,6 +29,8 @@ class PositionItem(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     symbol: str
     broker: str
+    account: Optional[str] = None
+    account_id: Optional[str] = None
     asset_class: str
     strategy: StrategyType
     industry: str
@@ -66,5 +68,6 @@ class PortfolioResponse(BaseModel):
     total_capital: CurrencyValue
     remaining_capital: CurrencyValue
     broker_totals: Dict[str, BrokerSummary] = Field(default_factory=dict)
+    account_totals: Dict[str, BrokerSummary] = Field(default_factory=dict)
     positions: List[PositionItem]
     sectors: Optional[List[SectorSummary]] = Field(default_factory=list)

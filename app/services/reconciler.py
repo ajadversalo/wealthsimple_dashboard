@@ -16,15 +16,49 @@ from app.services.market_data import fetch_underlying_prices
 # HELPER FUNCTIONS
 # ==========================================
 
+def normalize_account_label(account: dict) -> str:
+    """Return a stable display/grouping label for a SnapTrade account."""
+    brokerage = account.get("brokerage") or {}
+    institution = str(
+        brokerage.get("name")
+        or account.get("institution_name")
+        or account.get("brokerage_name")
+        or ""
+    ).upper()
+    account_name = str(
+        account.get("name")
+        or account.get("account_name")
+        or account.get("number")
+        or ""
+    ).upper()
+    combined = f"{institution} {account_name}"
+
+    if "WEALTHSIMPLE" in institution:
+        if "OPTION" in combined:
+            return "WEALTHSIMPLE OPTIONS"
+        if "SWING" in combined:
+            return "WEALTHSIMPLE SWING"
+        return "WEALTHSIMPLE"
+    if "KRAKEN" in institution:
+        return "KRAKEN"
+    if "INTERACTIVE" in institution or "IBKR" in institution:
+        return "IBKR"
+    return institution or "OTHER"
+
+
+def raw_account_id(raw_item: dict):
+    acc_id = raw_item.get("account_id")
+    if not acc_id and isinstance(raw_item.get("account"), dict):
+        acc_id = raw_item["account"].get("id")
+    return acc_id
+
 def resolve_broker(raw_item: dict, account_map: Optional[Dict[str, str]] = None) -> str:
     """Identify institution from SnapTrade payload using account mapping and exchange metadata."""
     if not isinstance(raw_item, dict):
         return "OTHER"
 
     # 1. Direct lookup via account_id mapping
-    acc_id = raw_item.get("account_id")
-    if not acc_id and isinstance(raw_item.get("account"), dict):
-        acc_id = raw_item["account"].get("id")
+    acc_id = raw_account_id(raw_item)
 
     if account_map and acc_id in account_map:
         return account_map[acc_id]
@@ -153,23 +187,8 @@ def calculate_broker_totals(positions, fx_rate: float, raw_accounts: list, raw_b
     account_to_broker = {}
     for acc in (raw_accounts or []):
         acc_id = acc.get("id")
-        brokerage_info = acc.get("brokerage", {})
-        b_name = (
-            brokerage_info.get("name")
-            or acc.get("institution_name")
-            or acc.get("brokerage_name")
-            or ""
-        ).upper()
-
         if acc_id:
-            if "WEALTHSIMPLE" in b_name:
-                account_to_broker[acc_id] = "WEALTHSIMPLE"
-            elif "KRAKEN" in b_name:
-                account_to_broker[acc_id] = "KRAKEN"
-            elif "INTERACTIVE" in b_name or "IBKR" in b_name:
-                account_to_broker[acc_id] = "IBKR"
-            else:
-                account_to_broker[acc_id] = b_name or "OTHER"
+            account_to_broker[acc_id] = normalize_account_label(acc)
 
     # 2. Extract Cash (Remaining Capital) per broker from raw_balances
     if raw_balances:
@@ -281,18 +300,21 @@ def reconcile_positions(
 ) -> List[PositionItem]:
 
     positions: List[PositionItem] = []
-    equity_pool: Dict[str, float] = {}
-    equity_meta: Dict[str, dict] = {}
+    # Keep each account's shares separate. Otherwise shares in Swing can be
+    # incorrectly used to classify an Options-account covered call.
+    equity_pool: Dict[tuple, float] = {}
+    equity_meta: Dict[tuple, dict] = {}
 
     # 1. Map Equities
     for eq in raw_equities:
         sym = extract_ticker_symbol(eq.get("symbol"))
         if sym:
+            key = (raw_account_id(eq), sym)
             qty = float(eq.get("units") or eq.get("quantity") or 0)
-            equity_pool[sym] = equity_pool.get(sym, 0.0) + qty
-            equity_meta[sym] = eq
+            equity_pool[key] = equity_pool.get(key, 0.0) + qty
+            equity_meta[key] = eq
 
-    target_tickers = set(equity_pool.keys())
+    target_tickers = {symbol for _, symbol in equity_pool.keys()}
 
     for opt in raw_options:
         top = opt.get("symbol") if isinstance(opt.get("symbol"), dict) else {}
@@ -332,7 +354,8 @@ def reconcile_positions(
         qty = float(opt.get("units") or opt.get("quantity") or 0.0)
         is_short = qty < 0
         required_shares = abs(qty) * 100
-        available_shares = equity_pool.get(symbol, 0.0)
+        account_key = (raw_account_id(opt), symbol)
+        available_shares = equity_pool.get(account_key, 0.0)
         opt_price = float(opt.get("price") or opt.get("avg_price") or 0.0)
 
         industry = extract_industry(opt, symbol)
@@ -352,7 +375,7 @@ def reconcile_positions(
 
         # Covered Call
         if is_call and is_short and available_shares >= required_shares:
-            eq_match = equity_meta.get(symbol, {})
+            eq_match = equity_meta.get(account_key, {})
             avg_p = float(
                 eq_match.get("average_buy_price") or eq_match.get("avg_price") or 0.0
             )
@@ -361,6 +384,8 @@ def reconcile_positions(
                 PositionItem(
                     symbol=symbol,
                     broker=broker,
+                    account=account_map.get(raw_account_id(opt), broker) if account_map else broker,
+                    account_id=raw_account_id(opt),
                     asset_class=asset_class,
                     strategy=StrategyType.COVERED_CALL,
                     industry=industry,
@@ -371,7 +396,7 @@ def reconcile_positions(
                     option_leg=option_leg_data,
                 )
             )
-            equity_pool[symbol] -= required_shares
+            equity_pool[account_key] -= required_shares
 
         # Cash-Secured Put
         elif not is_call and is_short:
@@ -379,6 +404,8 @@ def reconcile_positions(
                 PositionItem(
                     symbol=symbol,
                     broker=broker,
+                    account=account_map.get(raw_account_id(opt), broker) if account_map else broker,
+                    account_id=raw_account_id(opt),
                     asset_class=asset_class,
                     strategy=StrategyType.CASH_SECURED_PUT,
                     industry=industry,
@@ -389,9 +416,9 @@ def reconcile_positions(
             )
 
     # 4. Catch Unmatched Long Shares
-    for symbol, remaining_shares in equity_pool.items():
+    for (account_id, symbol), remaining_shares in equity_pool.items():
         if remaining_shares > 0:
-            eq_match = equity_meta.get(symbol, {})
+            eq_match = equity_meta.get((account_id, symbol), {})
             broker = resolve_broker(eq_match, account_map)
             asset_class = resolve_asset_class(eq_match, broker)
 
@@ -412,6 +439,8 @@ def reconcile_positions(
                 PositionItem(
                     symbol=symbol,
                     broker=broker,
+                    account=account_map.get(account_id, broker) if account_map else broker,
+                    account_id=account_id,
                     asset_class=asset_class,
                     strategy=StrategyType.LONG_EQUITY,
                     industry=extract_industry(eq_match, symbol),
@@ -521,6 +550,7 @@ def build_portfolio_response(
             cad=round(remaining_usd * fx_rate, 2),
         ),
         broker_totals=broker_totals,
+        account_totals=broker_totals,
         positions=positions,
         sectors=sectors,
     )

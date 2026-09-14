@@ -10,6 +10,7 @@ from app.services.reconciler import (
     reconcile_positions,
     calculate_sector_summaries,
     calculate_broker_totals,
+    normalize_account_label,
 )
 from app.services.snaptrade import fetch_all_user_positions
 from app.services.csp_screener import screen_cash_secured_puts
@@ -52,23 +53,8 @@ async def get_portfolio_positions():
         account_map = {}
         for acc in raw_accounts:
             acc_id = acc.get("id")
-            brokerage_info = acc.get("brokerage", {})
-            b_name = (
-                brokerage_info.get("name")
-                or acc.get("institution_name")
-                or acc.get("brokerage_name")
-                or ""
-            ).upper()
-
             if acc_id:
-                if "WEALTHSIMPLE" in b_name:
-                    account_map[acc_id] = "WEALTHSIMPLE"
-                elif "KRAKEN" in b_name:
-                    account_map[acc_id] = "KRAKEN"
-                elif "INTERACTIVE" in b_name or "IBKR" in b_name:
-                    account_map[acc_id] = "IBKR"
-                else:
-                    account_map[acc_id] = b_name or "OTHER"
+                account_map[acc_id] = normalize_account_label(acc)
 
         # 2. Reconcile Positions & Sectors
         positions = reconcile_positions(raw_equities, raw_options, account_map=account_map)
@@ -139,6 +125,7 @@ async def get_portfolio_positions():
                 cad=round(usd_cash_balance * fx_rate, 2),
             ),
             broker_totals=broker_totals,  # <-- ADDED HERE
+            account_totals=broker_totals,
             positions=positions,
             sectors=sectors,
         )
