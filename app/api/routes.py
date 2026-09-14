@@ -29,29 +29,27 @@ def build_account_map(raw_accounts, raw_equities, raw_options):
     }
 
     # Prefer explicit deployment configuration when available.
-    swing_id = os.getenv("SNAPTRADE_SWING_ACCOUNT_ID")
-    options_id = os.getenv("SNAPTRADE_OPTIONS_ACCOUNT_ID")
+    # These are SnapTrade account IDs, not credentials. Keep environment
+    # overrides, but retain the known account IDs so a missing Render setting
+    # cannot collapse both accounts back to generic WEALTHSIMPLE.
+    swing_id = os.getenv(
+        "SNAPTRADE_SWING_ACCOUNT_ID", "92fe0874-cbca-4612-a2cf-3f0d4a3926df"
+    )
+    options_id = os.getenv(
+        "SNAPTRADE_OPTIONS_ACCOUNT_ID", "9c7fd8bd-598c-431f-af42-fe1c12b0b768"
+    )
     if swing_id:
         account_map[swing_id] = "WEALTHSIMPLE SWING"
     if options_id:
         account_map[options_id] = "WEALTHSIMPLE OPTIONS"
 
-    wealthsimple_ids = {
-        acc_id for acc_id, label in account_map.items() if label.startswith("WEALTHSIMPLE")
-    }
-    option_account_ids = {
-        item.get("account_id")
-        for item in raw_options
-        if isinstance(item, dict) and item.get("account_id") in wealthsimple_ids
-    }
-
-    # SnapTrade can return two Wealthsimple accounts with identical generic
-    # metadata. If options exist in exactly one of them, the other is Swing.
-    if len(wealthsimple_ids) == 2 and len(option_account_ids) == 1:
-        option_account_id = next(iter(option_account_ids))
-        account_map[option_account_id] = "WEALTHSIMPLE OPTIONS"
-        swing_account_id = next(iter(wealthsimple_ids - {option_account_id}))
-        account_map[swing_account_id] = "WEALTHSIMPLE SWING"
+    # Only use the explicit IDs for the final labels. Do not infer Swing from
+    # "not an options holding"—a stock position can legitimately exist in the
+    # Options account as well.
+    if options_id in account_map:
+        account_map[options_id] = "WEALTHSIMPLE OPTIONS"
+    if swing_id in account_map:
+        account_map[swing_id] = "WEALTHSIMPLE SWING"
 
     logger.info("Resolved account labels: %s", account_map)
     return account_map
@@ -146,6 +144,14 @@ async def get_portfolio_positions():
             raw_balances=raw_balances,
             account_map=account_map,
         )
+        account_totals = calculate_broker_totals(
+            positions=positions,
+            fx_rate=fx_rate,
+            raw_accounts=raw_accounts,
+            raw_balances=raw_balances,
+            account_map=account_map,
+            group_by_account=True,
+        )
 
         return PortfolioResponse(
             account_id="ALL_ACCOUNTS",
@@ -159,8 +165,8 @@ async def get_portfolio_positions():
                 usd=round(usd_cash_balance, 2),
                 cad=round(usd_cash_balance * fx_rate, 2),
             ),
-            broker_totals=broker_totals,  # <-- ADDED HERE
-            account_totals=broker_totals,
+            broker_totals=broker_totals,
+            account_totals=account_totals,
             positions=positions,
             sectors=sectors,
         )

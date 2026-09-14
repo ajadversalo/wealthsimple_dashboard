@@ -183,6 +183,7 @@ def calculate_broker_totals(
     raw_accounts: list,
     raw_balances: list = None,
     account_map: Optional[Dict[str, str]] = None,
+    group_by_account: bool = False,
 ) -> dict:
     broker_cash = {}
     broker_long_equity = {}
@@ -206,16 +207,23 @@ def calculate_broker_totals(
                     acc_id = acc_info.get("id") if isinstance(acc_info, dict) else acc_info
                 
                 broker_name = account_to_broker.get(acc_id, "OTHER")
+                group_name = (
+                    (account_map or {}).get(acc_id, broker_name)
+                    if group_by_account
+                    else broker_name
+                )
 
                 currency_code = bal.get("currency", {}).get("code", "USD")
                 cash_amount = float(bal.get("cash", 0.0))
 
                 cash_usd = cash_amount if currency_code == "USD" else (cash_amount / fx_rate if fx_rate else cash_amount)
-                broker_cash[broker_name] = broker_cash.get(broker_name, 0.0) + cash_usd
+                broker_cash[group_name] = broker_cash.get(group_name, 0.0) + cash_usd
 
     # 3. Calculate Position Long Equity, Option Liabilities, and CSP Collateral
     for pos in positions:
         broker = getattr(pos, "broker", None) if not isinstance(pos, dict) else pos.get("broker", "OTHER")
+        account = getattr(pos, "account", None) if not isinstance(pos, dict) else pos.get("account")
+        group = account if group_by_account and account else broker
         underlying = getattr(pos, "underlying", None) if not isinstance(pos, dict) else pos.get("underlying")
         option_leg = getattr(pos, "option_leg", None) if not isinstance(pos, dict) else pos.get("option_leg")
         current_price = getattr(pos, "current_price", 0.0) if not isinstance(pos, dict) else pos.get("current_price", 0.0)
@@ -225,7 +233,7 @@ def calculate_broker_totals(
             shares = getattr(underlying, "shares", 0.0) if not isinstance(underlying, dict) else underlying.get("shares", 0.0)
             if shares and current_price:
                 val = float(shares) * float(current_price)
-                broker_long_equity[broker] = broker_long_equity.get(broker, 0.0) + val
+                broker_long_equity[group] = broker_long_equity.get(group, 0.0) + val
 
         # Option legs (Liabilities + CSP Collateral)
         if option_leg:
@@ -241,12 +249,12 @@ def calculate_broker_totals(
             if qty_val < 0:
                 # Option liability = current cost to buy back
                 liab = abs(qty_val) * opt_price * 100.0
-                broker_option_liabilities[broker] = broker_option_liabilities.get(broker, 0.0) + liab
+                broker_option_liabilities[group] = broker_option_liabilities.get(group, 0.0) + liab
 
                 # Cash Secured Put collateral reservation
                 if opt_type == "PUT":
                     collateral = strike_val * 100.0 * abs(qty_val)
-                    broker_collateral[broker] = broker_collateral.get(broker, 0.0) + collateral
+                    broker_collateral[group] = broker_collateral.get(group, 0.0) + collateral
 
     # 4. Synthesize per-broker figures
     all_brokers = set(broker_cash.keys()).union(set(broker_long_equity.keys())).union(set(broker_collateral.keys()))
