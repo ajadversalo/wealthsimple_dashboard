@@ -126,12 +126,20 @@ async def get_portfolio_positions():
             if option_leg:
                 qty = getattr(option_leg, "quantity", 0.0) if not isinstance(option_leg, dict) else option_leg.get("quantity", 0.0)
                 opt_mkt_price = getattr(option_leg, "avg_price", 0.0) if not isinstance(option_leg, dict) else option_leg.get("avg_price", 0.0)
+                strategy = getattr(pos, "strategy", None) if not isinstance(pos, dict) else pos.get("strategy")
 
                 qty_val = float(qty) if qty is not None else 0.0
                 opt_p_val = float(opt_mkt_price) if opt_mkt_price is not None else 0.0
 
                 if qty_val < 0:
-                    short_options_liability_usd += abs(qty_val) * opt_p_val * 100.0
+                    if strategy == "PUT_CREDIT_SPREAD":
+                        current_debit = getattr(option_leg, "current_debit", None) if not isinstance(option_leg, dict) else option_leg.get("current_debit")
+                        if current_debit is not None:
+                            short_options_liability_usd += float(current_debit)
+                    else:
+                        market_price = getattr(option_leg, "market_price", None) if not isinstance(option_leg, dict) else option_leg.get("market_price")
+                        option_price = float(market_price) if market_price is not None else opt_p_val
+                        short_options_liability_usd += abs(qty_val) * option_price * 100.0
 
         # 5. True Net Portfolio Equity = Liquid Cash + Shares Value - Option Liability
         net_portfolio_usd = (usd_cash_balance + long_equity_usd) - short_options_liability_usd

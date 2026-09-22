@@ -171,6 +171,69 @@ def calculate_moneyness(option_type: str, strike: float, stock_price: float) -> 
         return "ITM" if stock_price < strike else "OTM"
 
 
+def _option_symbol_details(option: dict) -> dict:
+    """Normalize the option-symbol portion of a SnapTrade holding."""
+    top = option.get("symbol") if isinstance(option.get("symbol"), dict) else {}
+    option_symbol = (
+        top.get("option_symbol")
+        if isinstance(top.get("option_symbol"), dict)
+        else option.get("option_symbol") or {}
+    )
+    underlying = option_symbol.get("underlying_symbol") if isinstance(option_symbol, dict) else None
+    symbol = extract_ticker_symbol(underlying) or extract_ticker_symbol(top)
+    option_type = str(option_symbol.get("option_type") or "").upper()
+
+    return {
+        "top": top,
+        "option_symbol": option_symbol,
+        "symbol": symbol,
+        "contract_symbol": str(
+            option_symbol.get("ticker") or option.get("ticker") or symbol
+        ).strip(),
+        "option_type": "CALL" if "CALL" in option_type else "PUT",
+        "strike": float(option_symbol.get("strike_price") or 0.0),
+        "expiration": str(option_symbol.get("expiration_date") or ""),
+        "quantity": float(option.get("units") or option.get("quantity") or 0.0),
+        "account_id": raw_account_id(option),
+    }
+
+
+def _raw_option_average_price(option: dict) -> Optional[float]:
+    """Return the opening option premium per share."""
+    value = option.get("average_purchase_price")
+    if value is not None:
+        return abs(float(value)) / 100.0
+
+    value = option.get("avg_price")
+    return abs(float(value)) if value is not None else None
+
+
+def _raw_option_market_price(option: dict) -> Optional[float]:
+    """Return the latest option quote per share when SnapTrade supplied one."""
+    for key in ("price_per_share", "market_price_per_share"):
+        if option.get(key) is not None:
+            return abs(float(option[key]))
+
+    for key in ("price", "market_price", "last_price", "current_price"):
+        if option.get(key) is not None:
+            return abs(float(option[key])) / 100.0
+
+    return None
+
+
+def calculate_spread_moneyness(
+    short_strike: float, long_strike: float, stock_price: float
+) -> str:
+    """Classify a put spread by the underlying price relative to both strikes."""
+    if not stock_price or not short_strike or not long_strike:
+        return "UNKNOWN"
+    if stock_price >= short_strike:
+        return "OTM"
+    if stock_price <= long_strike:
+        return "ITM"
+    return "PARTIAL ITM"
+
+
 # ==========================================
 # BROKER TOTALS CALCULATOR
 # ==========================================
@@ -224,6 +287,7 @@ def calculate_broker_totals(
         broker = getattr(pos, "broker", None) if not isinstance(pos, dict) else pos.get("broker", "OTHER")
         account = getattr(pos, "account", None) if not isinstance(pos, dict) else pos.get("account")
         group = account if group_by_account and account else broker
+        strategy = getattr(pos, "strategy", None) if not isinstance(pos, dict) else pos.get("strategy")
         underlying = getattr(pos, "underlying", None) if not isinstance(pos, dict) else pos.get("underlying")
         option_leg = getattr(pos, "option_leg", None) if not isinstance(pos, dict) else pos.get("option_leg")
         current_price = getattr(pos, "current_price", 0.0) if not isinstance(pos, dict) else pos.get("current_price", 0.0)
@@ -239,6 +303,7 @@ def calculate_broker_totals(
         if option_leg:
             qty = getattr(option_leg, "quantity", 0.0) if not isinstance(option_leg, dict) else option_leg.get("quantity", 0.0)
             avg_price = getattr(option_leg, "avg_price", 0.0) if not isinstance(option_leg, dict) else option_leg.get("avg_price", 0.0)
+            market_price = getattr(option_leg, "market_price", None) if not isinstance(option_leg, dict) else option_leg.get("market_price")
             strike = getattr(option_leg, "strike_price", 0.0) if not isinstance(option_leg, dict) else option_leg.get("strike_price", 0.0)
             opt_type = getattr(option_leg, "option_type", "") if not isinstance(option_leg, dict) else option_leg.get("option_type", "")
 
@@ -246,9 +311,17 @@ def calculate_broker_totals(
             opt_price = float(avg_price or 0.0)
             strike_val = float(strike or 0.0)
 
-            if qty_val < 0:
+            if strategy == StrategyType.PUT_CREDIT_SPREAD:
+                current_debit = getattr(option_leg, "current_debit", None) if not isinstance(option_leg, dict) else option_leg.get("current_debit")
+                max_loss = getattr(option_leg, "max_loss", None) if not isinstance(option_leg, dict) else option_leg.get("max_loss")
+                if current_debit is not None:
+                    broker_option_liabilities[group] = broker_option_liabilities.get(group, 0.0) + float(current_debit)
+                if max_loss is not None:
+                    broker_collateral[group] = broker_collateral.get(group, 0.0) + float(max_loss)
+            elif qty_val < 0:
                 # Option liability = current cost to buy back
-                liab = abs(qty_val) * opt_price * 100.0
+                quote = float(market_price) if market_price is not None else opt_price
+                liab = abs(qty_val) * quote * 100.0
                 broker_option_liabilities[group] = broker_option_liabilities.get(group, 0.0) + liab
 
                 # Cash Secured Put collateral reservation
@@ -328,44 +401,155 @@ def reconcile_positions(
             equity_pool[key] = equity_pool.get(key, 0.0) + qty
             equity_meta[key] = eq
 
-    target_tickers = {symbol for _, symbol in equity_pool.keys()}
+    option_records = []
+    for index, opt in enumerate(raw_options):
+        if not isinstance(opt, dict):
+            continue
+        details = _option_symbol_details(opt)
+        if details["symbol"]:
+            option_records.append({"index": index, "raw": opt, **details})
 
-    for opt in raw_options:
-        top = opt.get("symbol") if isinstance(opt.get("symbol"), dict) else {}
-        opt_sym = (
-            top.get("option_symbol")
-            if isinstance(top.get("option_symbol"), dict)
-            else opt.get("option_symbol") or {}
-        )
-        underlying = opt_sym.get("underlying_symbol") if isinstance(opt_sym, dict) else None
-        sym = extract_ticker_symbol(underlying) or extract_ticker_symbol(top)
-        if sym:
-            target_tickers.add(sym)
+    target_tickers = {symbol for _, symbol in equity_pool.keys()}
+    target_tickers.update(record["symbol"] for record in option_records)
 
     # 2. Fetch live stock quotes if not provided
     if live_prices is None:
         live_prices = fetch_underlying_prices(list(target_tickers))
 
-    # 3. Process Options
-    for opt in raw_options:
+    # 3. Pair put-credit-spread legs before processing single-leg positions.
+    # The nearest lower protective put is paired with each short put when the
+    # account, underlying, expiration, and option type all match.
+    remaining_long_qty = {
+        record["index"]: record["quantity"]
+        for record in option_records
+        if record["option_type"] == "PUT" and record["quantity"] > 0
+    }
+    paired_short_qty: Dict[int, float] = {}
+    spread_pairs = []
+
+    for short in option_records:
+        if short["option_type"] != "PUT" or short["quantity"] >= 0:
+            continue
+
+        candidates = [
+            long
+            for long in option_records
+            if long["option_type"] == "PUT"
+            and long["quantity"] > 0
+            and long["account_id"] == short["account_id"]
+            and long["symbol"] == short["symbol"]
+            and long["expiration"] == short["expiration"]
+            and long["strike"] < short["strike"]
+            and remaining_long_qty.get(long["index"], 0.0) > 0
+        ]
+        candidates.sort(key=lambda record: record["strike"], reverse=True)
+
+        short_remaining = abs(short["quantity"])
+        for long in candidates:
+            if short_remaining <= 0:
+                break
+            long_remaining = remaining_long_qty[long["index"]]
+            spread_quantity = min(short_remaining, long_remaining)
+            if spread_quantity <= 0:
+                continue
+
+            spread_pairs.append((short, long, spread_quantity))
+            paired_short_qty[short["index"]] = paired_short_qty.get(short["index"], 0.0) + spread_quantity
+            remaining_long_qty[long["index"]] -= spread_quantity
+            short_remaining -= spread_quantity
+
+    for short, long, spread_quantity in spread_pairs:
+        broker = resolve_broker(short["raw"], account_map)
+        stock_price = live_prices.get(short["symbol"], 0.0)
+        short_average = _raw_option_average_price(short["raw"])
+        long_average = _raw_option_average_price(long["raw"])
+        net_credit = (
+            short_average - long_average
+            if short_average is not None and long_average is not None
+            else None
+        )
+        short_market = _raw_option_market_price(short["raw"])
+        long_market = _raw_option_market_price(long["raw"])
+        current_debit = (
+            short_market - long_market
+            if short_market is not None and long_market is not None
+            else None
+        )
+        spread_width = short["strike"] - long["strike"]
+        max_profit = net_credit * 100.0 * spread_quantity if net_credit is not None else None
+        max_loss = (
+            spread_width * 100.0 * spread_quantity - max_profit
+            if max_profit is not None
+            else None
+        )
+        current_pnl = (
+            (net_credit - current_debit) * 100.0 * spread_quantity
+            if net_credit is not None and current_debit is not None
+            else None
+        )
+
+        option_leg_data = OptionLeg(
+            contract_symbol=short["contract_symbol"],
+            option_type="PUT",
+            strike_price=short["strike"],
+            expiration_date=short["expiration"],
+            quantity=-spread_quantity,
+            avg_price=net_credit,
+            market_price=current_debit,
+            break_even_price=(short["strike"] - net_credit) if net_credit is not None else None,
+            moneyness=calculate_spread_moneyness(
+                short["strike"], long["strike"], stock_price
+            ),
+            short_contract_symbol=short["contract_symbol"],
+            long_contract_symbol=long["contract_symbol"],
+            short_strike_price=short["strike"],
+            long_strike_price=long["strike"],
+            spread_width=spread_width,
+            net_credit=net_credit,
+            current_debit=current_debit,
+            max_profit=max_profit,
+            max_loss=max_loss,
+            current_pnl=current_pnl,
+        )
+        positions.append(
+            PositionItem(
+                symbol=short["symbol"],
+                broker=broker,
+                account=account_map.get(short["account_id"], broker) if account_map else broker,
+                account_id=short["account_id"],
+                asset_class=resolve_asset_class(short["raw"], broker),
+                strategy=StrategyType.PUT_CREDIT_SPREAD,
+                industry=extract_industry(short["raw"], short["symbol"]),
+                current_price=stock_price,
+                underlying=None,
+                option_leg=option_leg_data,
+            )
+        )
+
+    # 4. Process remaining single-leg options.
+    for record in option_records:
+        opt = record["raw"]
+        # Protective long puts are represented inside their spread and should
+        # not appear as standalone positions.
+        if record["quantity"] > 0 and record["option_type"] == "PUT":
+            continue
+
         broker = resolve_broker(opt, account_map)
         asset_class = resolve_asset_class(opt, broker)
 
-        top = opt.get("symbol") if isinstance(opt.get("symbol"), dict) else {}
-        opt_sym = (
-            top.get("option_symbol")
-            if isinstance(top.get("option_symbol"), dict)
-            else opt.get("option_symbol") or {}
-        )
-        underlying = opt_sym.get("underlying_symbol") if isinstance(opt_sym, dict) else None
-        symbol = extract_ticker_symbol(underlying) or extract_ticker_symbol(top)
+        top = record["top"]
+        opt_sym = record["option_symbol"]
+        symbol = record["symbol"]
+        contract_sym = record["contract_symbol"]
+        strike = record["strike"]
+        exp_date = record["expiration"]
+        is_call = record["option_type"] == "CALL"
 
-        contract_sym = str(opt_sym.get("ticker") or symbol).strip()
-        strike = float(opt_sym.get("strike_price") or 0.0)
-        exp_date = str(opt_sym.get("expiration_date") or "")
-        is_call = "CALL" in str(opt_sym.get("option_type") or "").upper()
-
-        qty = float(opt.get("units") or opt.get("quantity") or 0.0)
+        qty = record["quantity"]
+        if not is_call and qty < 0:
+            qty += paired_short_qty.get(record["index"], 0.0)
+            if qty == 0:
+                continue
         is_short = qty < 0
         required_shares = abs(qty) * 100
         account_key = (raw_account_id(opt), symbol)
@@ -374,14 +558,11 @@ def reconcile_positions(
         # not the opening premium. Use the position cost basis instead.
         # SnapTrade reports option average_purchase_price per contract;
         # PositionItem stores premium per share for the UI calculations.
-        average_purchase_price = opt.get("average_purchase_price")
-        if average_purchase_price is not None:
-            opt_price = abs(float(average_purchase_price)) / 100.0
-        else:
-            # Preserve compatibility with older normalized payloads that
-            # already supplied avg_price on a per-share basis. Never fall
-            # back to `price`, because that is a market quote.
-            opt_price = float(opt.get("avg_price") or 0.0)
+        opt_price = _raw_option_average_price(opt) or 0.0
+        market_price = _raw_option_market_price(opt)
+        break_even_price = None
+        if opt_price > 0:
+            break_even_price = strike - opt_price if not is_call else strike + opt_price
 
         industry = extract_industry(opt, symbol)
         stock_price = live_prices.get(symbol, 0.0)
@@ -393,6 +574,8 @@ def reconcile_positions(
             expiration_date=exp_date,
             quantity=qty,
             avg_price=opt_price if opt_price > 0 else None,
+            market_price=market_price,
+            break_even_price=break_even_price,
             moneyness=calculate_moneyness(
                 "CALL" if is_call else "PUT", strike, stock_price
             ),
@@ -486,6 +669,9 @@ def reconcile_positions(
         if pos.underlying and pos.underlying.shares:
             p = pos.current_price or pos.underlying.avg_purchase_price or 0.0
             val = pos.underlying.shares * p
+        elif pos.strategy == StrategyType.PUT_CREDIT_SPREAD and pos.option_leg:
+            # Use defined risk as the capital committed to a credit spread.
+            val = pos.option_leg.max_loss or 0.0
         elif pos.strategy == StrategyType.CASH_SECURED_PUT and pos.option_leg:
             strike = pos.option_leg.strike_price or 0.0
             contracts = abs(pos.option_leg.quantity)
@@ -513,6 +699,8 @@ def calculate_sector_summaries(positions: List[PositionItem]) -> List[SectorSumm
         if pos.underlying and pos.underlying.shares:
             p = pos.current_price or pos.underlying.avg_purchase_price or 0.0
             cap = pos.underlying.shares * p
+        elif pos.strategy == StrategyType.PUT_CREDIT_SPREAD and pos.option_leg:
+            cap = pos.option_leg.max_loss or 0.0
         elif pos.strategy == StrategyType.CASH_SECURED_PUT and pos.option_leg:
             strike = pos.option_leg.strike_price or 0.0
             contracts = abs(pos.option_leg.quantity)

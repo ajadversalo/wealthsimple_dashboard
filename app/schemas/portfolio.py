@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class StrategyType(str, Enum):
     CASH_SECURED_PUT = "CASH_SECURED_PUT"
+    PUT_CREDIT_SPREAD = "PUT_CREDIT_SPREAD"
     COVERED_CALL = "COVERED_CALL"
     LONG_STOCK = "LONG_STOCK"
     LONG_EQUITY = "LONG_EQUITY"
@@ -22,7 +23,20 @@ class OptionLeg(BaseModel):
     expiration_date: str
     quantity: float
     avg_price: Optional[float] = None
+    market_price: Optional[float] = None
+    break_even_price: Optional[float] = None
     moneyness: Optional[str] = None
+    # A put credit spread is represented as one position with both contracts.
+    short_contract_symbol: Optional[str] = None
+    long_contract_symbol: Optional[str] = None
+    short_strike_price: Optional[float] = None
+    long_strike_price: Optional[float] = None
+    spread_width: Optional[float] = None
+    net_credit: Optional[float] = None
+    current_debit: Optional[float] = None
+    max_profit: Optional[float] = None
+    max_loss: Optional[float] = None
+    current_pnl: Optional[float] = None
 
 
 class PositionItem(BaseModel):
