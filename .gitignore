@@ -1,4 +1,8 @@
 .env
-__pycache__/
-*.pyc
 .venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/

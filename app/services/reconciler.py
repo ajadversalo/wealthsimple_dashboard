@@ -240,6 +240,18 @@ def calculate_spread_moneyness(
 
 # app/services/reconciler.py
 
+def account_total_usd(account: dict, fx_rate: float) -> Optional[float]:
+    """SnapTrade account.balance.total is the brokerage NAV, in native currency."""
+    total = (account.get("balance") or {}).get("total")
+    if not isinstance(total, dict) or total.get("amount") is None:
+        return None
+    amount = float(total["amount"])
+    currency = str(total.get("currency") or "USD").upper()
+    if currency == "CAD":
+        return amount / fx_rate if fx_rate else amount
+    return amount
+
+
 def calculate_broker_totals(
     positions,
     fx_rate: float,
@@ -252,6 +264,7 @@ def calculate_broker_totals(
     broker_long_equity = {}
     broker_option_liabilities = {}
     broker_collateral = {}
+    broker_nav = {}
 
     # 1. Map account_id -> normalized broker name
     account_to_broker = {}
@@ -259,6 +272,14 @@ def calculate_broker_totals(
         acc_id = acc.get("id")
         if acc_id:
             account_to_broker[acc_id] = (account_map or {}).get(acc_id, normalize_account_label(acc))
+            group_name = (
+                (account_map or {}).get(acc_id, account_to_broker[acc_id])
+                if group_by_account
+                else account_to_broker[acc_id]
+            )
+            nav = account_total_usd(acc, fx_rate)
+            if nav is not None:
+                broker_nav[group_name] = broker_nav.get(group_name, 0.0) + nav
 
     # 2. Extract Cash (Remaining Capital) per broker from raw_balances
     if raw_balances:
@@ -339,8 +360,14 @@ def calculate_broker_totals(
         option_liab = round(broker_option_liabilities.get(b, 0.0), 2)
         collateral = round(broker_collateral.get(b, 0.0), 2)
 
-        # Net Liquidating Value (Matches Wealthsimple App)
-        net_usd = round(cash + long_eq - option_liab, 2)
+        # Prefer SnapTrade's account NAV over summed cash wallets.
+        # Cash/buying power for Wealthsimple options includes reserved CSP
+        # collateral and CAD+USD wallets, which overstates the account value
+        # shown in the Wealthsimple app.
+        if b in broker_nav:
+            net_usd = round(broker_nav[b], 2)
+        else:
+            net_usd = round(cash + long_eq - option_liab, 2)
         
         # Capital Deployed in Assets/Collateral
         deployed_usd = round(long_eq + collateral, 2)
